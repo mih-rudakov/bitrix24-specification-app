@@ -1,49 +1,31 @@
+mkdir bitrix24-specification-app
+cd bitrix24-specification-app
+# создать файлы вручную или с помощью here-doc
+cat > index.html <<'HTML'
 <!DOCTYPE html>
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Bitrix24 App</title>
+  <title>Спецификация Bitrix24</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="//api.bitrix24.com/api/v1/"></script>
   <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet" />
   <style>
-    html, body, #root {
-      height: 100%;
-      margin: 0;
-      padding: 0;
-      overflow: hidden;
-    }
-    .material-symbols-outlined {
-      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
-      user-select: none;
-      vertical-align: middle;
-    }
-    .loader {
-      border: 4px solid #f3f3f3;
-      border-top: 4px solid #3b82f6;
-      border-radius: 50%;
-      width: 40px;
-      height: 40px;
-      animation: spin 1s linear infinite;
-    }
-    @keyframes spin {
-      0% { transform: rotate(0deg); }
-      100% { transform: rotate(360deg); }
-    }
+    html, body, #root { height: 100%; margin: 0; padding: 0; overflow: hidden; }
+    .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; user-select: none; vertical-align: middle; }
+    .loader { border: 4px solid #f3f3f3; border-top: 4px solid #3b82f6; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
-  <div id="root" class="h-full"></div>
+  <div id="root"></div>
   <script type="text/babel">
     const App = () => {
       const { useState, useEffect } = React;
-
       const [isLoading, setIsLoading] = useState(true);
       const [error, setError] = useState(null);
       const [spec, setSpec] = useState(null);
@@ -55,75 +37,58 @@
 
       useEffect(() => {
         BX24.init(() => {
-          try {
-            const placementInfo = BX24.placement.info();
-            const specId = placementInfo?.options?.ID;
-            if (!specId) throw new Error("Не удалось получить ID сделки.");
+          console.log('BX24 SDK инициализирован');
+          const placementInfo = BX24.placement.info();
+          console.log('placementInfo:', placementInfo);
+          const specId = placementInfo?.options?.ID;
+          console.log('specId из плейсмента:', specId);
+          if (!specId) { setError("Не удалось получить ID сделки."); setIsLoading(false); return; }
 
-            BX24.callMethod('crm.deal.get', { id: specId }, (specResult) => {
-              if (specResult.error()) {
-                setError('Ошибка при загрузке спецификации.');
-                setIsLoading(false);
-                return;
-              }
+          BX24.callMethod('crm.deal.get', {
+            id: specId,
+            select: ['ID','TITLE','OPPORTUNITY','CURRENCY_ID','DATE_CREATE','UF_CRM_DEAL_SPECIFIKACIYA']
+          }, (specResult) => {
+            if (specResult.error()) { console.error('Ошибка при загрузке спецификации:', specResult.error()); setError('Ошибка при загрузке спецификации.'); setIsLoading(false); return; }
+            const specData = specResult.data();
+            console.log('Данные спецификации:', specData);
+            setSpec(specData);
 
-              const specData = specResult.data();
-              setSpec(specData);
+            const contractId = specData?.UF_CRM_DEAL_SPECIFIKACIYA;
+            console.log('ID договора из поля UF_CRM_DEAL_SPECIFIKACIYA:', contractId);
+            if (!contractId) { setError('Спецификация не содержит ссылки на договор.'); setIsLoading(false); return; }
 
-              const contractId = specData?.UF_CRM_CONTRACT_ID;
-              if (!contractId) {
-                setError('Спецификация не содержит ссылки на договор.');
-                setIsLoading(false);
-                return;
-              }
+            BX24.callMethod('crm.deal.get', { id: contractId }, (contractResult) => {
+              if (contractResult.error()) { console.error('Ошибка при загрузке договора:', contractResult.error()); setError('Ошибка при загрузке договора.'); setIsLoading(false); return; }
+              const contractData = contractResult.data();
+              console.log('Данные договора:', contractData);
+              setContract(contractData);
 
-              BX24.callMethod('crm.deal.get', { id: contractId }, (contractResult) => {
-                if (contractResult.error()) {
-                  setError('Ошибка при загрузке договора.');
+              BX24.callMethod('crm.deal.list', {
+                filter: { 'UF_CRM_DEAL_SPECIFIKACIYA': contractId },
+                select: ['ID'],
+                order: { ID: 'ASC' }
+              }, (listResult) => {
+                if (listResult.error()) { console.error('Ошибка при подсчёте спецификаций:', listResult.error()); setError('Ошибка при подсчёте спецификаций.'); setIsLoading(false); return; }
+                const allSpecs = listResult.data();
+                console.log('Все спецификации по договору:', allSpecs);
+                const index = allSpecs.findIndex(d => d.ID == specId);
+                setSpecNumber(index >= 0 ? index + 1 : null);
+
+                BX24.callMethod('documentgenerator.template.list', {}, (tplResult) => {
+                  if (tplResult.error()) { console.error('Ошибка при загрузке шаблонов:', tplResult.error()); setError('Ошибка при загрузке шаблонов.'); }
+                  else { console.log('Список шаблонов:', tplResult.data()); setTemplates(tplResult.data()); }
                   setIsLoading(false);
-                  return;
-                }
-
-                const contractData = contractResult.data();
-                setContract(contractData);
-
-                BX24.callMethod('crm.deal.list', {
-                  filter: { 'UF_CRM_CONTRACT_ID': contractId },
-                  select: ['ID'],
-                  order: { ID: 'ASC' }
-                }, (listResult) => {
-                  if (listResult.error()) {
-                    setError('Ошибка при подсчёте спецификаций.');
-                    setIsLoading(false);
-                    return;
-                  }
-
-                  const allSpecs = listResult.data();
-                  const index = allSpecs.findIndex(d => d.ID == specId);
-                  setSpecNumber(index >= 0 ? index + 1 : null);
-
-                  // Загружаем шаблоны
-                  BX24.callMethod('documentgenerator.template.list', {}, (tplResult) => {
-                    if (tplResult.error()) {
-                      setError('Ошибка при загрузке шаблонов.');
-                    } else {
-                      setTemplates(tplResult.data());
-                    }
-                    setIsLoading(false);
-                  });
                 });
               });
             });
-          } catch (e) {
-            setError(e instanceof Error ? e.message : 'Неизвестная ошибка');
-            setIsLoading(false);
-          }
+          });
         });
       }, []);
 
       const generateDocument = () => {
         if (!spec?.ID || !selectedTemplate) return;
         setIsGenerating(true);
+        console.log('Генерация документа по шаблону:', selectedTemplate);
         BX24.callMethod('documentgenerator.document.create', {
           templateId: selectedTemplate,
           provider: 'crm_deal',
@@ -132,15 +97,15 @@
           title: `Спецификация №${specNumber || ''} к договору №${contract?.ID || ''}`
         }, (result) => {
           setIsGenerating(false);
-          if (result.error()) {
-            alert('Ошибка при создании документа: ' + result.error_description);
-          } else {
+          if (result.error()) { console.error('Ошибка при создании документа:', result.error()); alert('Ошибка при создании документа: ' + result.error_description); }
+          else {
             const docId = result.data().id;
+            console.log('Документ создан, ID:', docId);
             BX24.callMethod('documentgenerator.document.get', { id: docId }, (docResult) => {
-              if (docResult.error()) {
-                alert('Ошибка при получении документа: ' + docResult.error_description);
-              } else {
+              if (docResult.error()) { console.error('Ошибка при получении документа:', docResult.error()); alert('Ошибка при получении документа: ' + docResult.error_description); }
+              else {
                 const url = docResult.data().showUrl;
+                console.log('URL предпросмотра документа:', url);
                 window.open(url, '_blank');
               }
             });
@@ -196,6 +161,22 @@
 
           <div className="mt-6">
             <label className="block mb-2 text-slate-700 font-medium">Выберите шаблон:</label>
-            <select
-              className="w-full p-2 border rounded-lg"
-              value
+            <select className="w-full p-2 border rounded-lg" value={selectedTemplate || ''} onChange={(e) => setSelectedTemplate(e.target.value)}>
+              <option value="" disabled>— Выберите шаблон —</option>
+              {templates.map(tpl => (<option key={tpl.id} value={tpl.id}>{tpl.name}</option>))}
+            </select>
+          </div>
+
+          <button className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50" disabled={!selectedTemplate || isGenerating} onClick={generateDocument}>
+            {isGenerating ? 'Генерация...' : 'Сформировать документ'}
+          </button>
+        </div>
+      );
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
+HTML
