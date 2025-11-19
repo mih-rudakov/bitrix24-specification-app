@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Bitrix24 App</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="//api.bitrix24.com/api/v1/"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet" />
+  <style>
+    html, body, #root {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+    }
+    .material-symbols-outlined {
+      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+      user-select: none;
+      vertical-align: middle;
+    }
+    .loader {
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid #3b82f6;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div id="root" class="h-full"></div>
+  <script type="text/babel">
+    const App = () => {
+      const { useState, useEffect } = React;
+
+      const [isLoading, setIsLoading] = useState(true);
+      const [error, setError] = useState(null);
+      const [spec, setSpec] = useState(null);
+      const [contract, setContract] = useState(null);
+      const [specNumber, setSpecNumber] = useState(null);
+      const [templates, setTemplates] = useState([]);
+      const [selectedTemplate, setSelectedTemplate] = useState(null);
+      const [isGenerating, setIsGenerating] = useState(false);
+
+      useEffect(() => {
+        BX24.init(() => {
+          try {
+            const placementInfo = BX24.placement.info();
+            const specId = placementInfo?.options?.ID;
+            if (!specId) throw new Error("Не удалось получить ID сделки.");
+
+            BX24.callMethod('crm.deal.get', { id: specId }, (specResult) => {
+              if (specResult.error()) {
+                setError('Ошибка при загрузке спецификации.');
+                setIsLoading(false);
+                return;
+              }
+
+              const specData = specResult.data();
+              setSpec(specData);
+
+              const contractId = specData?.UF_CRM_CONTRACT_ID;
+              if (!contractId) {
+                setError('Спецификация не содержит ссылки на договор.');
+                setIsLoading(false);
+                return;
+              }
+
+              BX24.callMethod('crm.deal.get', { id: contractId }, (contractResult) => {
+                if (contractResult.error()) {
+                  setError('Ошибка при загрузке договора.');
+                  setIsLoading(false);
+                  return;
+                }
+
+                const contractData = contractResult.data();
+                setContract(contractData);
+
+                BX24.callMethod('crm.deal.list', {
+                  filter: { 'UF_CRM_CONTRACT_ID': contractId },
+                  select: ['ID'],
+                  order: { ID: 'ASC' }
+                }, (listResult) => {
+                  if (listResult.error()) {
+                    setError('Ошибка при подсчёте спецификаций.');
+                    setIsLoading(false);
+                    return;
+                  }
+
+                  const allSpecs = listResult.data();
+                  const index = allSpecs.findIndex(d => d.ID == specId);
+                  setSpecNumber(index >= 0 ? index + 1 : null);
+
+                  // Загружаем шаблоны
+                  BX24.callMethod('documentgenerator.template.list', {}, (tplResult) => {
+                    if (tplResult.error()) {
+                      setError('Ошибка при загрузке шаблонов.');
+                    } else {
+                      setTemplates(tplResult.data());
+                    }
+                    setIsLoading(false);
+                  });
+                });
+              });
+            });
+          } catch (e) {
+            setError(e instanceof Error ? e.message : 'Неизвестная ошибка');
+            setIsLoading(false);
+          }
+        });
+      }, []);
+
+      const generateDocument = () => {
+        if (!spec?.ID || !selectedTemplate) return;
+        setIsGenerating(true);
+        BX24.callMethod('documentgenerator.document.create', {
+          templateId: selectedTemplate,
+          provider: 'crm_deal',
+          value: spec.ID,
+          region: 'ru',
+          title: `Спецификация №${specNumber || ''} к договору №${contract?.ID || ''}`
+        }, (result) => {
+          setIsGenerating(false);
+          if (result.error()) {
+            alert('Ошибка при создании документа: ' + result.error_description);
+          } else {
+            const docId = result.data().id;
+            BX24.callMethod('documentgenerator.document.get', { id: docId }, (docResult) => {
+              if (docResult.error()) {
+                alert('Ошибка при получении документа: ' + docResult.error_description);
+              } else {
+                const url = docResult.data().showUrl;
+                window.open(url, '_blank');
+              }
+            });
+          }
+        });
+      };
+
+      if (isLoading) {
+        return (
+          <div className="flex items-center justify-center h-full">
+            <div className="loader"></div>
+            <p className="ml-4 text-slate-500">Загрузка данных...</p>
+          </div>
+        );
+      }
+
+      if (error) {
+        return (
+          <div className="flex items-center justify-center h-full p-4 text-center text-red-600 bg-red-100 rounded-lg">
+            <span className="material-symbols-outlined mr-2">error</span>
+            {error}
+          </div>
+        );
+      }
+
+      return (
+        <div className="p-6 space-y-6">
+          <h1 className="text-2xl font-bold text-slate-800">Спецификация: {spec?.TITLE || '—'}</h1>
+          <p className="text-slate-500">Номер в рамках договора: <strong>{specNumber || '—'}</strong></p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-white p-4 rounded-lg border shadow">
+              <h2 className="text-slate-600 font-semibold mb-2">Сумма</h2>
+              <p>{spec?.OPPORTUNITY || 0} {spec?.CURRENCY_ID || ''}</p>
+            </div>
+            <div className="bg-white p-4 rounded-lg border shadow">
+              <h2 className="text-slate-600 font-semibold mb-2">Дата создания</h2>
+              <p>{spec?.DATE_CREATE ? new Date(spec.DATE_CREATE).toLocaleDateString() : '—'}</p>
+            </div>
+          </div>
+
+          <h2 className="text-xl font-bold text-slate-700 mt-6">Договор</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-white p-4 rounded-lg border shadow">
+              <h2 className="text-slate-600 font-semibold mb-2">Номер договора</h2>
+              <p>{contract?.ID}</p>
+            </div>
+            <div className="bg-white p-4 rounded-lg border shadow">
+              <h2 className="text-slate-600 font-semibold mb-2">Название</h2>
+              <p>{contract?.TITLE || '—'}</p>
+            </div>
+          </div>
+
+          <div className="mt-6">
+            <label className="block mb-2 text-slate-700 font-medium">Выберите шаблон:</label>
+            <select
+              className="w-full p-2 border rounded-lg"
+              value
