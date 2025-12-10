@@ -1,182 +1,1347 @@
-mkdir bitrix24-specification-app
-cd bitrix24-specification-app
-# создать файлы вручную или с помощью here-doc
-cat > index.html <<'HTML'
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Спецификация Bitrix24</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="//api.bitrix24.com/api/v1/"></script>
-  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet" />
-  <style>
-    html, body, #root { height: 100%; margin: 0; padding: 0; overflow: hidden; }
-    .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; user-select: none; vertical-align: middle; }
-    .loader { border: 4px solid #f3f3f3; border-top: 4px solid #3b82f6; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
-    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Контроль дебиторской задолженности | Bitrix24</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet" />
+    <style>
+        body { background-color: #f8fafc; }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        .pulse-warning { animation: pulse 2s infinite; }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+        .gradient-border {
+            border: 2px solid transparent;
+            background: linear-gradient(white, white) padding-box,
+                        linear-gradient(135deg, #6366f1, #8b5cf6) border-box;
+        }
+    </style>
 </head>
 <body>
-  <div id="root"></div>
-  <script type="text/babel">
-    const App = () => {
-      const { useState, useEffect } = React;
-      const [isLoading, setIsLoading] = useState(true);
-      const [error, setError] = useState(null);
-      const [spec, setSpec] = useState(null);
-      const [contract, setContract] = useState(null);
-      const [specNumber, setSpecNumber] = useState(null);
-      const [templates, setTemplates] = useState([]);
-      const [selectedTemplate, setSelectedTemplate] = useState(null);
-      const [isGenerating, setIsGenerating] = useState(false);
+    <div id="root"></div>
+    
+    <!-- Подключаем скрипты в правильном порядке -->
+<script src="//api.bitrix24.com/api/v1/"></script>
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-      useEffect(() => {
-        BX24.init(() => {
-          console.log('BX24 SDK инициализирован');
-          const placementInfo = BX24.placement.info();
-          console.log('placementInfo:', placementInfo);
-          const specId = placementInfo?.options?.ID;
-          console.log('specId из плейсмента:', specId);
-          if (!specId) { setError("Не удалось получить ID сделки."); setIsLoading(false); return; }
+<script type="text/babel">
+    const { useState, useEffect, useRef } = React;
 
-          BX24.callMethod('crm.deal.get', {
-            id: specId,
-            select: ['ID','TITLE','OPPORTUNITY','CURRENCY_ID','DATE_CREATE','UF_CRM_DEAL_SPECIFIKACIYA']
-          }, (specResult) => {
-            if (specResult.error()) { console.error('Ошибка при загрузке спецификации:', specResult.error()); setError('Ошибка при загрузке спецификации.'); setIsLoading(false); return; }
-            const specData = specResult.data();
-            console.log('Данные спецификации:', specData);
-            setSpec(specData);
+    // Обёртка для вызова Bitrix24 API
+    const callB24 = (method, params = {}) => {
+        return new Promise((resolve, reject) => {
+            console.log(`[BX24 API] Вызов метода: ${method}`, params);
 
-            const contractId = specData?.UF_CRM_DEAL_SPECIFIKACIYA;
-            console.log('ID договора из поля UF_CRM_DEAL_SPECIFIKACIYA:', contractId);
-            if (!contractId) { setError('Спецификация не содержит ссылки на договор.'); setIsLoading(false); return; }
+            if (typeof BX24 === 'undefined' || !BX24.callMethod) {
+                const error = new Error('BX24 SDK не загружен');
+                console.error('[BX24 API] Критическая ошибка:', error);
+                reject(error);
+                return;
+            }
 
-            BX24.callMethod('crm.deal.get', { id: contractId }, (contractResult) => {
-              if (contractResult.error()) { console.error('Ошибка при загрузке договора:', contractResult.error()); setError('Ошибка при загрузке договора.'); setIsLoading(false); return; }
-              const contractData = contractResult.data();
-              console.log('Данные договора:', contractData);
-              setContract(contractData);
+            BX24.callMethod(method, params, (result) => {
+                if (!result || typeof result.error !== 'function') {
+                    reject(new Error('Некорректный ответ от BX24 API'));
+                    return;
+                }
 
-              BX24.callMethod('crm.deal.list', {
-                filter: { 'UF_CRM_DEAL_SPECIFIKACIYA': contractId },
-                select: ['ID'],
-                order: { ID: 'ASC' }
-              }, (listResult) => {
-                if (listResult.error()) { console.error('Ошибка при подсчёте спецификаций:', listResult.error()); setError('Ошибка при подсчёте спецификаций.'); setIsLoading(false); return; }
-                const allSpecs = listResult.data();
-                console.log('Все спецификации по договору:', allSpecs);
-                const index = allSpecs.findIndex(d => d.ID == specId);
-                setSpecNumber(index >= 0 ? index + 1 : null);
-
-                BX24.callMethod('documentgenerator.template.list', {}, (tplResult) => {
-                  if (tplResult.error()) { console.error('Ошибка при загрузке шаблонов:', tplResult.error()); setError('Ошибка при загрузке шаблонов.'); }
-                  else { console.log('Список шаблонов:', tplResult.data()); setTemplates(tplResult.data()); }
-                  setIsLoading(false);
-                });
-              });
+                if (result.error()) {
+                    const error = result.error();
+                    console.error(`[BX24 API] Ошибка в методе ${method}:`, error);
+                    reject(error);
+                } else {
+                    resolve(result.data());
+                }
             });
-          });
         });
-      }, []);
-
-      const generateDocument = () => {
-        if (!spec?.ID || !selectedTemplate) return;
-        setIsGenerating(true);
-        console.log('Генерация документа по шаблону:', selectedTemplate);
-        BX24.callMethod('documentgenerator.document.create', {
-          templateId: selectedTemplate,
-          provider: 'crm_deal',
-          value: spec.ID,
-          region: 'ru',
-          title: `Спецификация №${specNumber || ''} к договору №${contract?.ID || ''}`
-        }, (result) => {
-          setIsGenerating(false);
-          if (result.error()) { console.error('Ошибка при создании документа:', result.error()); alert('Ошибка при создании документа: ' + result.error_description); }
-          else {
-            const docId = result.data().id;
-            console.log('Документ создан, ID:', docId);
-            BX24.callMethod('documentgenerator.document.get', { id: docId }, (docResult) => {
-              if (docResult.error()) { console.error('Ошибка при получении документа:', docResult.error()); alert('Ошибка при получении документа: ' + docResult.error_description); }
-              else {
-                const url = docResult.data().showUrl;
-                console.log('URL предпросмотра документа:', url);
-                window.open(url, '_blank');
-              }
-            });
-          }
-        });
-      };
-
-      if (isLoading) {
-        return (
-          <div className="flex items-center justify-center h-full">
-            <div className="loader"></div>
-            <p className="ml-4 text-slate-500">Загрузка данных...</p>
-          </div>
-        );
-      }
-
-      if (error) {
-        return (
-          <div className="flex items-center justify-center h-full p-4 text-center text-red-600 bg-red-100 rounded-lg">
-            <span className="material-symbols-outlined mr-2">error</span>
-            {error}
-          </div>
-        );
-      }
-
-      return (
-        <div className="p-6 space-y-6">
-          <h1 className="text-2xl font-bold text-slate-800">Спецификация: {spec?.TITLE || '—'}</h1>
-          <p className="text-slate-500">Номер в рамках договора: <strong>{specNumber || '—'}</strong></p>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="bg-white p-4 rounded-lg border shadow">
-              <h2 className="text-slate-600 font-semibold mb-2">Сумма</h2>
-              <p>{spec?.OPPORTUNITY || 0} {spec?.CURRENCY_ID || ''}</p>
-            </div>
-            <div className="bg-white p-4 rounded-lg border shadow">
-              <h2 className="text-slate-600 font-semibold mb-2">Дата создания</h2>
-              <p>{spec?.DATE_CREATE ? new Date(spec.DATE_CREATE).toLocaleDateString() : '—'}</p>
-            </div>
-          </div>
-
-          <h2 className="text-xl font-bold text-slate-700 mt-6">Договор</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="bg-white p-4 rounded-lg border shadow">
-              <h2 className="text-slate-600 font-semibold mb-2">Номер договора</h2>
-              <p>{contract?.ID}</p>
-            </div>
-            <div className="bg-white p-4 rounded-lg border shadow">
-              <h2 className="text-slate-600 font-semibold mb-2">Название</h2>
-              <p>{contract?.TITLE || '—'}</p>
-            </div>
-          </div>
-
-          <div className="mt-6">
-            <label className="block mb-2 text-slate-700 font-medium">Выберите шаблон:</label>
-            <select className="w-full p-2 border rounded-lg" value={selectedTemplate || ''} onChange={(e) => setSelectedTemplate(e.target.value)}>
-              <option value="" disabled>— Выберите шаблон —</option>
-              {templates.map(tpl => (<option key={tpl.id} value={tpl.id}>{tpl.name}</option>))}
-            </select>
-          </div>
-
-          <button className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50" disabled={!selectedTemplate || isGenerating} onClick={generateDocument}>
-            {isGenerating ? 'Генерация...' : 'Сформировать документ'}
-          </button>
-        </div>
-      );
     };
 
-    const root = ReactDOM.createRoot(document.getElementById('root'));
-    root.render(<App />);
-  </script>
+    // Главный компонент
+    const App = () => {
+        const [loading, setLoading] = useState(true);
+        const [error, setError] = useState(null);
+        const [isDemoMode, setIsDemoMode] = useState(false);
+        const dealIdRef = useRef(null);
+
+        useEffect(() => {
+            const initApp = async () => {
+                console.log('[App] Инициализация приложения');
+
+                try {
+                    if (typeof BX24 !== 'undefined' && BX24.init) {
+                        await new Promise((resolve, reject) => {
+                            BX24.init(() => {
+                                try {
+                                    const placementInfo = BX24.placement.info();
+                                    const options = placementInfo?.options || {};
+                                    const params = new URLSearchParams(window.location.search);
+
+                                    dealIdRef.current =
+                                        options?.ID ||
+                                        placementInfo?.entityId ||
+                                        params.get('dealId') ||
+                                        '2614';
+
+                                    console.log('[App] ID сделки:', dealIdRef.current);
+                                    resolve();
+                                } catch (err) {
+                                    reject(err);
+                                }
+                            });
+                        });
+
+                        // Загружаем данные параллельно
+                        await Promise.all([
+                            loadDealData(),
+                            loadUserFields(),
+                            loadPayments()
+                        ]);
+                    } else {
+                        throw new Error('Bitrix24 SDK недоступен');
+                    }
+                } catch (err) {
+                    console.error('[App] Критическая ошибка инициализации:', err);
+                    setError('Не удалось загрузить приложение. Запустите его внутри Bitrix24.');
+                    setIsDemoMode(true);
+                    loadDemoData();
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            initApp();
+        }, []);
+
+        // ...
+    };
+</script>
+    
+    
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useCallback, useRef } = React;
+
+        // ОБНОВЛЕННАЯ ФУНКЦИЯ: Обертка для удобной работы с API Bitrix24 через промисы с подробным логированием
+        const callB24 = (method, params = {}) => {
+            return new Promise((resolve, reject) => {
+                console.log(`[BX24 API] Вызов метода: ${method}`, params);
+                
+                if (!BX24 || !BX24.callMethod) {
+                    const error = new Error('Библиотека Bitrix24 не загружена');
+                    console.error('[BX24 API] Критическая ошибка:', error);
+                    reject(error);
+                    return;
+                }
+                
+                BX24.callMethod(method, params, (result) => {
+                    console.log(`[BX24 API] Ответ по методу ${method}:`, result);
+                    
+                    if (result.error()) {
+                        // Детально логируем ошибку
+                        const error = result.error();
+                        console.error(`[BX24 API] Ошибка в методе ${method}:`, error);
+                        console.error(`[BX24 API] Код ошибки:`, error.ex ? error.ex.error : 'N/A');
+                        console.error(`[BX24 API] Описание:`, error.ex ? error.ex.error_description : 'N/A');
+                        reject(error);
+                    } else {
+                        const data = result.data();
+                        console.log(`[BX24 API] Успешные данные от ${method}:`, data);
+                        resolve(data);
+                    }
+                });
+            });
+        };
+
+        // Функция для вызова AI (Gemini через прокси)
+        const callGemini = async (prompt, description) => {
+            try {
+                const auth = BX24.getAuth();
+                if (!auth) {
+                    throw new Error('Не авторизован в Bitrix24');
+                }
+
+                const apiUrl = '/api-proxy/v1beta/models/gemini-2.0-flash-exp:generateContent';
+
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-B24-Access-Token': auth.access_token,
+                        'X-B24-Refresh-Token': auth.refresh_token || '',
+                        'X-B24-Domain': auth.domain,
+                        'X-Expense-Description': encodeURIComponent(description)
+                    },
+                    body: JSON.stringify({
+                        contents: [{
+                            role: 'user',
+                            parts: [{ text: prompt }]
+                        }],
+                        generationConfig: {
+                            temperature: 0.7,
+                            topP: 1,
+                            topK: 40,
+                            maxOutputTokens: 1000
+                        }
+                    })
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Ошибка API (${response.status}): ${errorText}`);
+                }
+
+                const data = await response.json();
+                return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            } catch (error) {
+                console.error('Ошибка при вызове Gemini API:', error);
+                throw error;
+            }
+        };
+
+        // Компонент для отображения платежа
+        const PaymentCard = ({ payment, onStatusChange, onDelete, onAddToDeal }) => {
+            const [isEditing, setIsEditing] = useState(false);
+            const [editedPayment, setEditedPayment] = useState({ ...payment });
+            const statusColors = {
+                'ожидает': 'bg-yellow-100 text-yellow-800 border-yellow-200',
+                'оплачен': 'bg-green-100 text-green-800 border-green-200',
+                'просрочен': 'bg-red-100 text-red-800 border-red-200',
+                'частично': 'bg-blue-100 text-blue-800 border-blue-200'
+            };
+
+            const formatDate = (dateString) => {
+                if (!dateString) return '—';
+                try {
+                    const date = new Date(dateString);
+                    return date.toLocaleDateString('ru-RU');
+                } catch (e) {
+                    return dateString;
+                }
+            };
+
+            const handleSave = () => {
+                onStatusChange(payment.id, editedPayment);
+                setIsEditing(false);
+            };
+
+            const getDaysOverdue = () => {
+                if (payment.status !== 'просрочен' || !payment.due_date) return 0;
+                try {
+                    const dueDate = new Date(payment.due_date);
+                    const today = new Date();
+                    const diffTime = today - dueDate;
+                    return Math.max(0, Math.floor(diffTime / (1000 * 60 * 60 * 24)));
+                } catch (e) {
+                    return 0;
+                }
+            };
+
+            const daysOverdue = getDaysOverdue();
+
+            return (
+                <div className={`bg-white rounded-xl border ${payment.status === 'просрочен' ? 'border-red-300' : 'border-slate-200'} p-4 hover:shadow-sm transition-shadow`}>
+                    <div className="flex justify-between items-start mb-3">
+                        <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                                <span className="material-symbols-outlined text-slate-400 text-lg">
+                                    {payment.type === 'аванс' ? 'payments' : 'receipt_long'}
+                                </span>
+                                <h4 className="font-semibold text-slate-800">{payment.name}</h4>
+                                {payment.in_deal && (
+                                    <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 text-xs rounded-full">
+                                        В сделке
+                                    </span>
+                                )}
+                            </div>
+                            <p className="text-sm text-slate-500">
+                                Срок: {formatDate(payment.due_date)}
+                                {payment.actual_date && ` • Факт: ${formatDate(payment.actual_date)}`}
+                                {daysOverdue > 0 && (
+                                    <span className="ml-2 text-red-600 font-medium">
+                                        Просрочено на {daysOverdue} дн.
+                                    </span>
+                                )}
+                            </p>
+                        </div>
+                        <div className="flex gap-2">
+                            {!payment.in_deal && onAddToDeal && (
+                                <button
+                                    onClick={() => onAddToDeal(payment)}
+                                    className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg"
+                                    title="Добавить в сделку"
+                                >
+                                    <span className="material-symbols-outlined text-lg">add_circle</span>
+                                </button>
+                            )}
+                            <button
+                                onClick={() => setIsEditing(!isEditing)}
+                                className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-lg"
+                            >
+                                <span className="material-symbols-outlined text-lg">edit</span>
+                            </button>
+                            <button
+                                onClick={() => onDelete(payment.id)}
+                                className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg"
+                            >
+                                <span className="material-symbols-outlined text-lg">delete</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="flex justify-between items-center">
+                        <div>
+                            <p className="text-2xl font-bold text-slate-900">
+                                {parseFloat(payment.amount || 0).toLocaleString('ru-RU')} ₽
+                            </p>
+                            {payment.paid_amount > 0 && (
+                                <p className="text-sm text-slate-500">
+                                    Оплачено: {parseFloat(payment.paid_amount || 0).toLocaleString('ru-RU')} ₽
+                                    {payment.amount > 0 && (
+                                        <span className="ml-2">
+                                            ({Math.round(((payment.paid_amount || 0) / payment.amount) * 100)}%)
+                                        </span>
+                                    )}
+                                </p>
+                            )}
+                        </div>
+                        {isEditing ? (
+                            <div className="flex gap-2">
+                                <select
+                                    value={editedPayment.status}
+                                    onChange={(e) => setEditedPayment({...editedPayment, status: e.target.value})}
+                                    className="px-3 py-1.5 border border-slate-300 rounded-lg text-sm"
+                                >
+                                    <option value="ожидает">Ожидает</option>
+                                    <option value="оплачен">Оплачен</option>
+                                    <option value="просрочен">Просрочен</option>
+                                    <option value="частично">Частично</option>
+                                </select>
+                                <button
+                                    onClick={handleSave}
+                                    className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm"
+                                >
+                                    Сохранить
+                                </button>
+                            </div>
+                        ) : (
+                            <span className={`px-3 py-1 rounded-full text-sm font-medium border ${statusColors[payment.status] || statusColors.ожидает}`}>
+                                {payment.status}
+                            </span>
+                        )}
+                    </div>
+
+                    {payment.comment && (
+                        <p className="mt-3 text-sm text-slate-600 bg-slate-50 p-2 rounded-lg">
+                            {payment.comment}
+                        </p>
+                    )}
+                </div>
+            );
+        };
+
+        // Компонент для добавления нового платежа
+        const AddPaymentForm = ({ dealId, onAddPayment, loading }) => {
+            const [isOpen, setIsOpen] = useState(false);
+            const [formData, setFormData] = useState({
+                name: '',
+                amount: '',
+                due_date: new Date().toISOString().split('T')[0],
+                type: 'плановый',
+                comment: ''
+            });
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                
+                try {
+                    const newPayment = {
+                        deal_id: dealId,
+                        ...formData,
+                        amount: parseFloat(formData.amount) || 0,
+                        paid_amount: 0,
+                        status: 'ожидает',
+                        created_at: new Date().toISOString()
+                    };
+                    
+                    await onAddPayment(newPayment);
+                    setIsOpen(false);
+                    setFormData({
+                        name: '',
+                        amount: '',
+                        due_date: new Date().toISOString().split('T')[0],
+                        type: 'плановый',
+                        comment: ''
+                    });
+                } catch (error) {
+                    console.error('Ошибка при добавлении платежа:', error);
+                }
+            };
+
+            return (
+                <>
+                    <button
+                        onClick={() => setIsOpen(true)}
+                        disabled={loading}
+                        className="flex items-center gap-2 px-4 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl hover:shadow-lg transition-all hover:scale-[1.02] disabled:opacity-50"
+                    >
+                        <span className="material-symbols-outlined">add</span>
+                        <span>Добавить платеж</span>
+                    </button>
+
+                    {isOpen && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+                            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+                                <div className="flex justify-between items-center p-6 border-b border-slate-200">
+                                    <h3 className="text-xl font-bold text-slate-900">Новый платеж</h3>
+                                    <button
+                                        onClick={() => setIsOpen(false)}
+                                        className="p-2 hover:bg-slate-100 rounded-lg"
+                                    >
+                                        <span className="material-symbols-outlined">close</span>
+                                    </button>
+                                </div>
+                                
+                                <form onSubmit={handleSubmit} className="p-6 space-y-4">
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 mb-1">
+                                            Наименование платежа
+                                        </label>
+                                        <input
+                                            type="text"
+                                            required
+                                            value={formData.name}
+                                            onChange={(e) => setFormData({...formData, name: e.target.value})}
+                                            className="w-full px-4 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                                            placeholder="Например: Аванс 30%"
+                                        />
+                                    </div>
+                                    
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-700 mb-1">
+                                                Сумма (₽)
+                                            </label>
+                                            <input
+                                                type="number"
+                                                required
+                                                min="0"
+                                                step="0.01"
+                                                value={formData.amount}
+                                                onChange={(e) => setFormData({...formData, amount: e.target.value})}
+                                                className="w-full px-4 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                                                placeholder="0.00"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-700 mb-1">
+                                                Срок оплаты
+                                            </label>
+                                            <input
+                                                type="date"
+                                                required
+                                                value={formData.due_date}
+                                                onChange={(e) => setFormData({...formData, due_date: e.target.value})}
+                                                className="w-full px-4 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                                            />
+                                        </div>
+                                    </div>
+                                    
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 mb-1">
+                                            Тип платежа
+                                        </label>
+                                        <select
+                                            value={formData.type}
+                                            onChange={(e) => setFormData({...formData, type: e.target.value})}
+                                            className="w-full px-4 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                                        >
+                                            <option value="плановый">Плановый платеж</option>
+                                            <option value="аванс">Аванс</option>
+                                            <option value="финальный">Финальный расчет</option>
+                                            <option value="штраф">Штраф/Пеня</option>
+                                        </select>
+                                    </div>
+                                    
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 mb-1">
+                                            Комментарий
+                                        </label>
+                                        <textarea
+                                            value={formData.comment}
+                                            onChange={(e) => setFormData({...formData, comment: e.target.value})}
+                                            className="w-full px-4 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                                            rows="2"
+                                            placeholder="Дополнительная информация..."
+                                        />
+                                    </div>
+                                    
+                                    <div className="flex gap-3 pt-4">
+                                        <button
+                                            type="button"
+                                            onClick={() => setIsOpen(false)}
+                                            className="flex-1 px-4 py-3 border border-slate-300 text-slate-700 rounded-xl hover:bg-slate-50"
+                                        >
+                                            Отмена
+                                        </button>
+                                        <button
+                                            type="submit"
+                                            className="flex-1 px-4 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl hover:shadow-lg"
+                                        >
+                                            Добавить платеж
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+                </>
+            );
+        };
+
+        // Главный компонент приложения
+        const App = () => {
+            const [loading, setLoading] = useState(true);
+            const [saving, setSaving] = useState(false);
+            const [error, setError] = useState(null);
+            const [dealData, setDealData] = useState(null);
+            const [payments, setPayments] = useState([]);
+            const [aiAnalysis, setAiAnalysis] = useState(null);
+            const [analyzing, setAnalyzing] = useState(false);
+            const [activeTab, setActiveTab] = useState('payments');
+            const [userFields, setUserFields] = useState([]);
+            const [isDemoMode, setIsDemoMode] = useState(false);
+            const dealIdRef = useRef(null);
+            const smartProcessIdRef = useRef(135);
+
+            // Загрузка данных сделки и платежей
+            useEffect(() => {
+                const initApp = async () => {
+                    console.log('[App] Начало инициализации приложения');
+                    
+                    try {
+                        if (!BX24) {
+                            throw new Error('Библиотека Bitrix24 не загружена');
+                        }
+
+                        await new Promise((resolve, reject) => {
+                            BX24.init(() => {
+                                console.log('[App] Bitrix24 SDK инициализирован');
+                                
+                                try {
+                                    // Получаем ID сделки из контекста размещения
+                                    const placementInfo = BX24.placement.info();
+                                    console.log('[App] Информация о размещении:', placementInfo);
+                                    
+                                    const options = placementInfo.options || {};
+                                    dealIdRef.current = options.ID || placementInfo.entityId;
+                                    
+                                    if (!dealIdRef.current) {
+                                        console.warn('[App] ID сделки не найден в контексте размещения');
+                                        // Для тестирования, если нет ID в размещении
+                                        const params = new URLSearchParams(window.location.search);
+                                        dealIdRef.current = params.get('dealId') || '2614';
+                                        console.log('[App] Используем ID сделки для теста:', dealIdRef.current);
+                                    } else {
+                                        console.log('[App] ID сделки из контекста:', dealIdRef.current);
+                                    }
+
+                                    resolve();
+                                } catch (err) {
+                                    console.error('[App] Ошибка получения контекста размещения:', err);
+                                    reject(err);
+                                }
+                            });
+                        });
+
+                        // Загружаем данные сделки
+                        await loadDealData();
+                        // Загружаем пользовательские поля
+                        await loadUserFields();
+                        // Загружаем платежи
+                        await loadPayments();
+                    } catch (err) {
+                        console.error('[App] Критическая ошибка инициализации:', err);
+                        setError('Не удалось загрузить приложение. Проверьте, что вы находитесь в Bitrix24.');
+                        // Включаем демо-режим при критической ошибке
+                        setIsDemoMode(true);
+                        loadDemoData();
+                    } finally {
+                        setLoading(false);
+                    }
+                };
+
+                initApp();
+            }, []);
+
+            // ОБНОВЛЕННАЯ ФУНКЦИЯ: Загрузка данных сделки
+            const loadDealData = async () => {
+                console.log('[App] Начало загрузки данных сделки для ID:', dealIdRef.current);
+                
+                try {
+                    const deal = await callB24('crm.deal.get', { 
+                        id: dealIdRef.current,
+                        select: ['ID', 'TITLE', 'OPPORTUNITY', 'COMPANY_ID', 'CONTACT_ID', 'STAGE_ID', 'ASSIGNED_BY_ID', 'CLOSEDATE']
+                    });
+                    
+                    console.log('[App] Данные сделки успешно получены:', deal);
+                    
+                    // Загружаем информацию о компании
+                    if (deal && deal.COMPANY_ID) {
+                        try {
+                            const company = await callB24('crm.company.get', { id: deal.COMPANY_ID });
+                            deal.COMPANY_TITLE = company.TITLE;
+                            console.log('[App] Данные компании загружены:', company.TITLE);
+                        } catch (e) {
+                            console.warn('[App] Не удалось загрузить компанию:', e);
+                            deal.COMPANY_TITLE = 'Компания не загружена';
+                        }
+                    } else {
+                        deal.COMPANY_TITLE = 'Компания не указана';
+                    }
+                    
+                    // Загружаем информацию о контакте
+                    if (deal && deal.CONTACT_ID) {
+                        try {
+                            const contact = await callB24('crm.contact.get', { id: deal.CONTACT_ID });
+                            deal.CONTACT_NAME = `${contact.NAME || ''} ${contact.LAST_NAME || ''}`.trim();
+                            console.log('[App] Данные контакта загружены:', deal.CONTACT_NAME);
+                        } catch (e) {
+                            console.warn('[App] Не удалось загрузить контакт:', e);
+                            deal.CONTACT_NAME = 'Контакт не загружен';
+                        }
+                    } else {
+                        deal.CONTACT_NAME = 'Контакт не указан';
+                    }
+                    
+                    setDealData(deal);
+                    setIsDemoMode(false); // Отключаем демо-режим при успешной загрузке
+                    
+                } catch (err) {
+                    console.error('[App] КРИТИЧЕСКАЯ ОШИБКА при загрузке сделки:', err);
+                    // Включаем демо-режим только при ошибке загрузки
+                    setIsDemoMode(true);
+                    setDealData({
+                        ID: dealIdRef.current,
+                        TITLE: `Сделка #${dealIdRef.current} (демо-режим)`,
+                        OPPORTUNITY: 0,
+                        COMPANY_TITLE: 'Ошибка загрузки данных',
+                        CONTACT_NAME: 'Проверьте права приложения',
+                        STAGE_ID: 'ERROR'
+                    });
+                }
+            };
+
+            const loadUserFields = async () => {
+                console.log('[App] Загрузка пользовательских полей');
+                try {
+                    const fields = await callB24('crm.deal.userfield.list');
+                    setUserFields(fields || []);
+                    console.log('[App] Пользовательские поля загружены:', fields?.length || 0);
+                } catch (err) {
+                    console.warn('[App] Не удалось загрузить пользовательские поля:', err);
+                }
+            };
+
+            const loadPayments = async () => {
+                console.log('[App] Загрузка платежей для сделки:', dealIdRef.current);
+                
+                // Если мы в демо-режиме, не пытаемся загружать платежи из API
+                if (isDemoMode) {
+                    console.log('[App] Демо-режим, загружаем тестовые платежи');
+                    loadMockPayments();
+                    return;
+                }
+                
+                try {
+                    // Создаем объект фильтра для API
+                    const filterKey = 'ufCrm2_' + smartProcessIdRef.current + '_DEAL_ID';
+                    const filterObj = {};
+                    filterObj[filterKey] = dealIdRef.current;
+                    
+                    console.log('[App] Фильтр для поиска платежей:', filterObj);
+                    
+                    const items = await callB24('crm.item.list', {
+                        entityTypeId: smartProcessIdRef.current,
+                        filter: filterObj,
+                        select: [
+                            'id', 
+                            'title', 
+                            'ufCrm2_' + smartProcessIdRef.current + '_AMOUNT',
+                            'ufCrm2_' + smartProcessIdRef.current + '_PAID_AMOUNT',
+                            'ufCrm2_' + smartProcessIdRef.current + '_DUE_DATE',
+                            'ufCrm2_' + smartProcessIdRef.current + '_ACTUAL_DATE',
+                            'ufCrm2_' + smartProcessIdRef.current + '_STATUS',
+                            'ufCrm2_' + smartProcessIdRef.current + '_TYPE',
+                            'ufCrm2_' + smartProcessIdRef.current + '_COMMENT',
+                            'ufCrm2_' + smartProcessIdRef.current + '_DEAL_ID'
+                        ]
+                    });
+
+                    console.log('[App] Найдено платежей:', items?.length || 0);
+                    
+                    if (items && items.length > 0) {
+                        const formattedPayments = items.map(item => ({
+                            id: item.id,
+                            name: item.title,
+                            amount: parseFloat(item['ufCrm2_' + smartProcessIdRef.current + '_AMOUNT'] || 0),
+                            paid_amount: parseFloat(item['ufCrm2_' + smartProcessIdRef.current + '_PAID_AMOUNT'] || 0),
+                            due_date: item['ufCrm2_' + smartProcessIdRef.current + '_DUE_DATE'],
+                            actual_date: item['ufCrm2_' + smartProcessIdRef.current + '_ACTUAL_DATE'],
+                            status: item['ufCrm2_' + smartProcessIdRef.current + '_STATUS'] || 'ожидает',
+                            type: item['ufCrm2_' + smartProcessIdRef.current + '_TYPE'] || 'плановый',
+                            comment: item['ufCrm2_' + smartProcessIdRef.current + '_COMMENT'] || '',
+                            deal_id: item['ufCrm2_' + smartProcessIdRef.current + '_DEAL_ID'],
+                            in_deal: true,
+                            created_at: item.createdTime
+                        }));
+
+                        setPayments(formattedPayments);
+                        console.log('[App] Платежи успешно загружены из API');
+                    } else {
+                        console.log('[App] Платежей не найдено в смарт-процессе, загружаем демо-данные');
+                        loadMockPayments();
+                    }
+                    
+                } catch (err) {
+                    console.error('[App] Ошибка загрузки платежей из API:', err);
+                    console.log('[App] Загружаем демо-платежи из-за ошибки API');
+                    loadMockPayments();
+                }
+            };
+
+            const loadMockPayments = () => {
+                console.log('[App] Загрузка демо-платежей');
+                // Тестовые данные для демонстрации
+                const mockPayments = [
+                    {
+                        id: 1,
+                        deal_id: dealIdRef.current,
+                        name: 'Аванс 30%',
+                        amount: 450000,
+                        paid_amount: 450000,
+                        due_date: '2024-01-15',
+                        actual_date: '2024-01-14',
+                        status: 'оплачен',
+                        type: 'аванс',
+                        comment: 'Оплачено по договору',
+                        in_deal: false
+                    },
+                    {
+                        id: 2,
+                        deal_id: dealIdRef.current,
+                        name: 'Платеж по факту поставки',
+                        amount: 750000,
+                        paid_amount: 0,
+                        due_date: new Date().toISOString().split('T')[0],
+                        actual_date: null,
+                        status: 'ожидает',
+                        type: 'плановый',
+                        comment: 'Оплата после поставки оборудования',
+                        in_deal: false
+                    },
+                    {
+                        id: 3,
+                        deal_id: dealIdRef.current,
+                        name: 'Финальный расчет',
+                        amount: 300000,
+                        paid_amount: 150000,
+                        due_date: '2024-03-15',
+                        actual_date: null,
+                        status: 'частично',
+                        type: 'финальный',
+                        comment: 'Окончательный расчет после подписания актов',
+                        in_deal: false
+                    }
+                ];
+                setPayments(mockPayments);
+            };
+
+            const loadDemoData = () => {
+                console.log('[App] Загрузка полных демо-данных');
+                // Демо-данные сделки
+                setDealData({
+                    ID: dealIdRef.current,
+                    TITLE: `Демо-сделка #${dealIdRef.current}`,
+                    OPPORTUNITY: 1500000,
+                    COMPANY_TITLE: 'ООО "ТехноПром"',
+                    CONTACT_NAME: 'Иванов Иван Иванович',
+                    STAGE_ID: 'PREPARATION'
+                });
+                loadMockPayments();
+            };
+
+            const addPayment = async (paymentData) => {
+                setSaving(true);
+                try {
+                    // В демо-версии просто добавляем в локальное состояние
+                    const newPayment = {
+                        ...paymentData,
+                        id: Date.now(),
+                        in_deal: false
+                    };
+                    
+                    setPayments(prev => [...prev, newPayment]);
+                    
+                    console.log('[App] Добавлен новый платеж:', newPayment);
+                    
+                } catch (err) {
+                    console.error('[App] Ошибка добавления платежа:', err);
+                    alert('Ошибка при добавлении платежа: ' + err.message);
+                } finally {
+                    setSaving(false);
+                }
+            };
+
+            const updatePaymentStatus = async (paymentId, updatedData) => {
+                setSaving(true);
+                try {
+                    // В демо-версии обновляем локальное состояние
+                    setPayments(prev => prev.map(p => 
+                        p.id === paymentId ? { ...p, ...updatedData } : p
+                    ));
+                    
+                    console.log('[App] Обновление платежа:', paymentId, updatedData);
+                    
+                } catch (err) {
+                    console.error('[App] Ошибка обновления платежа:', err);
+                    alert('Ошибка при обновлении платежа');
+                } finally {
+                    setSaving(false);
+                }
+            };
+
+            const deletePayment = async (paymentId) => {
+                if (!window.confirm('Вы уверены, что хотите удалить этот платеж?')) {
+                    return;
+                }
+
+                setSaving(true);
+                try {
+                    // В демо-версии удаляем из локального состояния
+                    setPayments(prev => prev.filter(p => p.id !== paymentId));
+                    
+                    console.log('[App] Удаление платежа:', paymentId);
+                    
+                } catch (err) {
+                    console.error('[App] Ошибка удаления платежа:', err);
+                    alert('Ошибка при удалении платежа');
+                } finally {
+                    setSaving(false);
+                }
+            };
+
+            const analyzeWithAI = async () => {
+                if (!payments.length) {
+                    alert('Нет платежей для анализа');
+                    return;
+                }
+                
+                setAnalyzing(true);
+                try {
+                    const summary = payments.reduce((acc, p) => {
+                        acc.total += p.amount || 0;
+                        acc.paid += p.paid_amount || 0;
+                        if (p.status === 'просрочен') acc.overdue += p.amount || 0;
+                        return acc;
+                    }, { total: 0, paid: 0, overdue: 0 });
+
+                    const prompt = `
+                        Анализ дебиторской задолженности по сделке "${dealData?.TITLE || 'без названия'}":
+                        - Общая сумма сделки: ${dealData?.OPPORTUNITY || 0} руб.
+                        - Всего платежей: ${payments.length}
+                        - Общая сумма к оплате: ${summary.total.toLocaleString('ru-RU')} руб.
+                        - Уже оплачено: ${summary.paid.toLocaleString('ru-RU')} руб.
+                        - Остаток к оплате: ${(summary.total - summary.paid).toLocaleString('ru-RU')} руб.
+                        - Просроченная задолженность: ${summary.overdue.toLocaleString('ru-RU')} руб.
+                        - Клиент: ${dealData?.COMPANY_TITLE || 'не указано'}
+                        
+                        Детали платежей:
+                        ${payments.map(p => `
+                            - ${p.name}: ${(p.amount || 0).toLocaleString('ru-RU')} руб., 
+                              статус: ${p.status}, 
+                              срок: ${p.due_date},
+                              ${(p.paid_amount || 0) > 0 ? `оплачено: ${(p.paid_amount || 0).toLocaleString('ru-RU')} руб.` : 'не оплачено'}
+                        `).join('')}
+                        
+                        Проанализируй риски дебиторской задолженности и дай практические рекомендации.`;
+                    
+                    // Для тестирования используем мок-ответ, если AI не доступен
+                    const mockAnalysis = `
+**Анализ дебиторской задолженности:**
+
+1. **Общая ситуация:** 
+   - Задолженность составляет ${(summary.total - summary.paid).toLocaleString('ru-RU')} руб.
+   - ${summary.overdue > 0 ? `ВНИМАНИЕ: Есть просроченная задолженность на ${summary.overdue.toLocaleString('ru-RU')} руб.` : 'Просроченной задолженности нет.'}
+
+2. **Рекомендации:**
+   - Свяжитесь с клиентом для подтверждения сроков оплаты
+   - Установите напоминания о предстоящих платежах
+   - Рассмотрите возможность частичной предоплаты для будущих сделок
+
+3. **Действия:**
+   - Отправить официальное напоминание о платежах
+   - Запланировать звонок менеджеру клиента
+   - Подготовить акты сверки`;
+                    
+                    // Пытаемся получить анализ от AI, если не получается - используем мок
+                    try {
+                        const analysis = await callGemini(prompt, 'Анализ дебиторской задолженности');
+                        setAiAnalysis(analysis);
+                    } catch (aiError) {
+                        console.warn('[App] AI недоступен, используем мок-данные:', aiError);
+                        setAiAnalysis(mockAnalysis);
+                    }
+                    
+                    setActiveTab('analysis');
+                } catch (error) {
+                    console.error('[App] Ошибка анализа:', error);
+                    setError('Ошибка при анализе данных: ' + error.message);
+                } finally {
+                    setAnalyzing(false);
+                }
+            };
+
+            // Расчет статистики
+            const stats = useMemo(() => {
+                if (!payments.length) {
+                    return {
+                        totalAmount: 0,
+                        totalPaid: 0,
+                        totalDue: 0,
+                        overdueAmount: 0,
+                        overdueCount: 0,
+                        pendingAmount: 0,
+                        pendingCount: 0
+                    };
+                }
+                
+                return payments.reduce((acc, p) => {
+                    const amount = p.amount || 0;
+                    const paid = p.paid_amount || 0;
+                    
+                    acc.totalAmount += amount;
+                    acc.totalPaid += paid;
+                    acc.totalDue += (amount - paid);
+                    
+                    if (p.status === 'просрочен') {
+                        acc.overdueAmount += amount - paid;
+                        acc.overdueCount++;
+                    } else if (p.status === 'ожидает') {
+                        acc.pendingAmount += amount - paid;
+                        acc.pendingCount++;
+                    }
+                    
+                    return acc;
+                }, {
+                    totalAmount: 0,
+                    totalPaid: 0,
+                    totalDue: 0,
+                    overdueAmount: 0,
+                    overdueCount: 0,
+                    pendingAmount: 0,
+                    pendingCount: 0
+                });
+            }, [payments]);
+
+            if (loading) return (
+                <div className="flex h-screen items-center justify-center">
+                    <div className="text-center">
+                        <span className="material-symbols-outlined animate-spin text-4xl text-indigo-600 mb-4">
+                            progress_activity
+                        </span>
+                        <p className="text-slate-600">Загрузка данных о задолженности...</p>
+                    </div>
+                </div>
+            );
+
+            if (error) return (
+                <div className="p-6 m-4 bg-red-50 text-red-800 rounded-xl border border-red-200 shadow-sm">
+                    <div className="flex items-center gap-3">
+                        <span className="material-symbols-outlined text-red-500">error</span>
+                        <div>
+                            <h3 className="font-bold">Ошибка загрузки</h3>
+                            <p className="text-sm mt-1">{error}</p>
+                            <button 
+                                onClick={() => window.location.reload()}
+                                className="mt-3 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+                            >
+                                Перезагрузить
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+
+            return (
+                <div className="max-w-7xl mx-auto p-4 md:p-6 font-sans text-slate-800">
+                    {/* Шапка с индикатором режима */}
+                    <div className={`rounded-2xl shadow-xl text-white p-6 mb-6 ${isDemoMode ? 'bg-gradient-to-r from-yellow-600 to-orange-600' : 'bg-gradient-to-r from-indigo-600 to-purple-700'}`}>
+                        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                            <div>
+                                <div className="flex items-center gap-3 mb-2">
+                                    <h1 className="text-2xl md:text-3xl font-bold">Контроль дебиторской задолженности</h1>
+                                    {isDemoMode && (
+                                        <span className="px-3 py-1 bg-yellow-800 text-white text-sm rounded-full">
+                                            ДЕМО-РЕЖИМ
+                                        </span>
+                                    )}
+                                </div>
+                                <p className="text-indigo-100 opacity-90">
+                                    {dealData?.TITLE || 'Сделка'} • {dealData?.COMPANY_TITLE || 'Клиент не указан'}
+                                </p>
+                                {isDemoMode && (
+                                    <p className="text-yellow-200 text-sm mt-2">
+                                        Реальные данные недоступны. Проверьте консоль браузера (F12) для диагностики.
+                                    </p>
+                                )}
+                            </div>
+                            <div className="text-right">
+                                <p className="text-3xl font-bold">
+                                    {stats.totalDue.toLocaleString('ru-RU')} ₽
+                                </p>
+                                <p className="text-indigo-100 opacity-90 text-sm">Общая задолженность</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Статистика */}
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+                            <div className="flex items-center gap-3">
+                                <div className="w-12 h-12 rounded-lg bg-green-100 flex items-center justify-center">
+                                    <span className="material-symbols-outlined text-green-600">payments</span>
+                                </div>
+                                <div>
+                                    <p className="text-2xl font-bold text-slate-900">
+                                        {stats.totalPaid.toLocaleString('ru-RU')} ₽
+                                    </p>
+                                    <p className="text-sm text-slate-500">Оплачено</p>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+                            <div className="flex items-center gap-3">
+                                <div className="w-12 h-12 rounded-lg bg-blue-100 flex items-center justify-center">
+                                    <span className="material-symbols-outlined text-blue-600">schedule</span>
+                                </div>
+                                <div>
+                                    <p className="text-2xl font-bold text-slate-900">
+                                        {stats.pendingAmount.toLocaleString('ru-RU')} ₽
+                                    </p>
+                                    <p className="text-sm text-slate-500">Ожидает оплаты ({stats.pendingCount})</p>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div className={`bg-white rounded-xl border ${stats.overdueCount > 0 ? 'gradient-border pulse-warning' : 'border-slate-200'} p-4 shadow-sm`}>
+                            <div className="flex items-center gap-3">
+                                <div className="w-12 h-12 rounded-lg bg-red-100 flex items-center justify-center">
+                                    <span className="material-symbols-outlined text-red-600">warning</span>
+                                </div>
+                                <div>
+                                    <p className="text-2xl font-bold text-slate-900">
+                                        {stats.overdueAmount.toLocaleString('ru-RU')} ₽
+                                    </p>
+                                    <p className="text-sm text-slate-500">
+                                        Просрочено ({stats.overdueCount})
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+                            <div className="flex items-center gap-3">
+                                <div className="w-12 h-12 rounded-lg bg-purple-100 flex items-center justify-center">
+                                    <span className="material-symbols-outlined text-purple-600">trending_up</span>
+                                </div>
+                                <div>
+                                    <p className="text-2xl font-bold text-slate-900">
+                                        {payments.filter(p => p.status === 'оплачен').length}/{payments.length}
+                                    </p>
+                                    <p className="text-sm text-slate-500">Платежей закрыто</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Панель управления */}
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+                        <div className="flex space-x-1 bg-slate-100 p-1 rounded-xl">
+                            <button
+                                onClick={() => setActiveTab('payments')}
+                                className={`px-4 py-2 rounded-lg transition-all ${activeTab === 'payments' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-600 hover:text-slate-900'}`}
+                            >
+                                Платежи
+                            </button>
+                            <button
+                                onClick={() => setActiveTab('analysis')}
+                                className={`px-4 py-2 rounded-lg transition-all ${activeTab === 'analysis' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-600 hover:text-slate-900'}`}
+                            >
+                                Аналитика
+                            </button>
+                        </div>
+                        
+                        <div className="flex flex-wrap gap-3">
+                            <button
+                                onClick={analyzeWithAI}
+                                disabled={analyzing || !payments.length}
+                                className="flex items-center gap-2 px-4 py-3 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-xl hover:shadow-lg disabled:opacity-50"
+                            >
+                                <span className="material-symbols-outlined">
+                                    {analyzing ? 'progress_activity' : 'insights'}
+                                </span>
+                                <span>{analyzing ? 'Анализ...' : 'AI Анализ'}</span>
+                            </button>
+                            <AddPaymentForm 
+                                dealId={dealIdRef.current} 
+                                onAddPayment={addPayment}
+                                loading={saving}
+                            />
+                        </div>
+                    </div>
+
+                    {/* Основной контент */}
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        {/* Список платежей */}
+                        <div className="lg:col-span-2">
+                            {activeTab === 'payments' ? (
+                                <>
+                                    <div className="flex justify-between items-center mb-4">
+                                        <h2 className="text-xl font-bold text-slate-900">График платежей</h2>
+                                        <span className="text-sm text-slate-500">
+                                            {payments.length} платеж{payments.length % 10 === 1 ? '' : 'а'}
+                                            {isDemoMode && ' (демо)'}
+                                        </span>
+                                    </div>
+                                    
+                                    {payments.length === 0 ? (
+                                        <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center">
+                                            <span className="material-symbols-outlined text-4xl text-slate-300 mb-3">
+                                                receipt_long
+                                            </span>
+                                            <h3 className="text-lg font-semibold text-slate-700 mb-2">Платежи не добавлены</h3>
+                                            <p className="text-slate-500 mb-4">Добавьте первый платеж для контроля задолженности</p>
+                                            <AddPaymentForm 
+                                                dealId={dealIdRef.current} 
+                                                onAddPayment={addPayment}
+                                                loading={saving}
+                                            />
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-4">
+                                            {payments.map(payment => (
+                                                <PaymentCard
+                                                    key={payment.id}
+                                                    payment={payment}
+                                                    onStatusChange={updatePaymentStatus}
+                                                    onDelete={deletePayment}
+                                                />
+                                            ))}
+                                        </div>
+                                    )}
+                                </>
+                            ) : (
+                                /* Вкладка аналитики */
+                                <div className="bg-white rounded-2xl border border-slate-200 p-6">
+                                    <h2 className="text-xl font-bold text-slate-900 mb-4">Аналитика задолженности</h2>
+                                    <div className="space-y-6">
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <div className="p-4 bg-slate-50 rounded-xl">
+                                                <h4 className="font-semibold text-slate-800 mb-2">Сводка по платежам</h4>
+                                                <div className="space-y-2">
+                                                    <div className="flex justify-between items-center">
+                                                        <span className="text-sm text-slate-600">Всего платежей</span>
+                                                        <span className="font-medium">{payments.length}</span>
+                                                    </div>
+                                                    <div className="flex justify-between items-center">
+                                                        <span className="text-sm text-slate-600">Оплачено</span>
+                                                        <span className="font-medium text-green-600">
+                                                            {payments.filter(p => p.status === 'оплачен').length}
+                                                        </span>
+                                                    </div>
+                                                    <div className="flex justify-between items-center">
+                                                        <span className="text-sm text-slate-600">Ожидает</span>
+                                                        <span className="font-medium text-yellow-600">
+                                                            {payments.filter(p => p.status === 'ожидает').length}
+                                                        </span>
+                                                    </div>
+                                                    <div className="flex justify-between items-center">
+                                                        <span className="text-sm text-slate-600">Просрочено</span>
+                                                        <span className="font-medium text-red-600">
+                                                            {payments.filter(p => p.status === 'просрочен').length}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            
+                                            <div className="p-4 bg-blue-50 rounded-xl border border-blue-200">
+                                                <h4 className="font-semibold text-slate-800 mb-2">Рекомендации</h4>
+                                                <ul className="space-y-2 text-sm text-slate-700">
+                                                    {stats.overdueCount > 0 && (
+                                                        <li className="flex items-start gap-2">
+                                                            <span className="material-symbols-outlined text-red-500 text-sm">warning</span>
+                                                            <span>Срочно свяжитесь с клиентом по просроченным платежам</span>
+                                                        </li>
+                                                    )}
+                                                    {stats.pendingCount > 0 && (
+                                                        <li className="flex items-start gap-2">
+                                                            <span className="material-symbols-outlined text-blue-500 text-sm">schedule</span>
+                                                            <span>Запланируйте напоминания о предстоящих платежах</span>
+                                                        </li>
+                                                    )}
+                                                    <li className="flex items-start gap-2">
+                                                        <span className="material-symbols-outlined text-green-500 text-sm">check_circle</span>
+                                                        <span>Регулярно обновляйте статусы оплат</span>
+                                                    </li>
+                                                </ul>
+                                            </div>
+                                        </div>
+                                        
+                                        {aiAnalysis && (
+                                            <div className="p-4 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl border border-blue-200">
+                                                <div className="flex items-center gap-2 mb-3">
+                                                    <span className="material-symbols-outlined text-blue-600">auto_awesome</span>
+                                                    <h4 className="font-semibold text-slate-800">AI Анализ рисков и рекомендации</h4>
+                                                </div>
+                                                <div className="text-slate-700 whitespace-pre-wrap">
+                                                    {aiAnalysis}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Боковая панель */}
+                        <div className="space-y-6">
+                            <div className="bg-white rounded-2xl border border-slate-200 p-6">
+                                <h3 className="font-bold text-slate-900 mb-4">Информация о сделке</h3>
+                                <div className="space-y-3">
+                                    <div>
+                                        <p className="text-sm text-slate-500">ID сделки</p>
+                                        <p className="font-medium">{dealIdRef.current}</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-sm text-slate-500">Название сделки</p>
+                                        <p className="font-medium truncate">{dealData?.TITLE || '—'}</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-sm text-slate-500">Компания</p>
+                                        <p className="font-medium">{dealData?.COMPANY_TITLE || '—'}</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-sm text-slate-500">Контактное лицо</p>
+                                        <p className="font-medium">{dealData?.CONTACT_NAME || '—'}</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-sm text-slate-500">Сумма сделки</p>
+                                        <p className="text-xl font-bold text-indigo-600">
+                                            {(dealData?.OPPORTUNITY || 0).toLocaleString('ru-RU')} ₽
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="bg-white rounded-2xl border border-slate-200 p-6">
+                                <h3 className="font-bold text-slate-900 mb-4">Диагностика</h3>
+                                <div className="space-y-3">
+                                    <div className="p-3 bg-slate-50 rounded-lg">
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <span className={`material-symbols-outlined ${isDemoMode ? 'text-yellow-600' : 'text-green-600'}`}>
+                                                {isDemoMode ? 'warning' : 'check_circle'}
+                                            </span>
+                                            <span className="font-medium">Режим работы</span>
+                                        </div>
+                                        <p className="text-sm text-slate-600">
+                                            {isDemoMode ? 'Демо-режим (ошибка загрузки)' : 'Режим Bitrix24 (данные загружены)'}
+                                        </p>
+                                    </div>
+                                    
+                                    <button 
+                                        onClick={() => {
+                                            console.clear();
+                                            console.log('[App] Ручная проверка работы API...');
+                                            callB24('crm.deal.get', { id: dealIdRef.current })
+                                                .then(data => {
+                                                    console.log('[App] Ручная проверка успешна:', data);
+                                                    alert('Проверка API успешна! Данные в консоли.');
+                                                })
+                                                .catch(err => {
+                                                    console.error('[App] Ручная проверка не удалась:', err);
+                                                    alert('Ошибка проверки API. Смотрите консоль.');
+                                                });
+                                        }}
+                                        className="w-full flex items-center justify-between p-3 text-left hover:bg-slate-50 rounded-lg group border border-slate-300"
+                                    >
+                                        <div className="flex items-center gap-3">
+                                            <span className="material-symbols-outlined text-slate-400 group-hover:text-indigo-600">
+                                                bug_report
+                                            </span>
+                                            <span>Проверить API</span>
+                                        </div>
+                                        <span className="material-symbols-outlined text-slate-400 text-lg">
+                                            chevron_right
+                                        </span>
+                                    </button>
+                                    
+                                    <button 
+                                        onClick={() => {
+                                            const lines = [
+                                                '=== Диагностика приложения ===',
+                                                `Время: ${new Date().toLocaleString()}`,
+                                                `ID сделки: ${dealIdRef.current}`,
+                                                `Режим: ${isDemoMode ? 'Демо' : 'Bitrix24'}`,
+                                                `Платежей: ${payments.length}`,
+                                                `Ошибка: ${error || 'Нет'}`,
+                                                'Откройте консоль (F12) для подробной информации.'
+                                            ];
+                                            alert(lines.join('\n'));
+                                        }}
+                                        className="w-full flex items-center justify-between p-3 text-left hover:bg-slate-50 rounded-lg group border border-slate-300"
+                                    >
+                                        <div className="flex items-center gap-3">
+                                            <span className="material-symbols-outlined text-slate-400 group-hover:text-indigo-600">
+                                                info
+                                            </span>
+                                            <span>Показать диагностику</span>
+                                        </div>
+                                        <span className="material-symbols-outlined text-slate-400 text-lg">
+                                            chevron_right
+                                        </span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Футер */}
+                    <div className="mt-8 pt-6 border-t border-slate-200 text-center text-sm text-slate-500">
+                        <p>
+                            Обновлено: {new Date().toLocaleDateString('ru-RU')} • 
+                            ID сделки: {dealIdRef.current} • 
+                            Режим: {isDemoMode ? 'Демо (ошибка загрузки)' : 'Bitrix24'} •
+                            {payments.length} платеж{payments.length % 10 === 1 ? '' : 'а'}
+                        </p>
+                        <p className="mt-1 text-xs">
+                            {isDemoMode ? 'Включён демо-режим. Откройте консоль (F12) для диагностики проблемы с API.' : 'Приложение работает с данными Bitrix24.'}
+                        </p>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
 </body>
 </html>
-HTML
